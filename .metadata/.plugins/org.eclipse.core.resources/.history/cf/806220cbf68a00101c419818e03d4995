@@ -1,0 +1,11 @@
+
+public class TickerData {
+	public String name;
+	public String date;
+	public String industry;
+	public double open;
+	public double close;
+	public double[] price = new double[4];
+	public long volume;
+
+}

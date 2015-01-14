@@ -1,0 +1,62 @@
+
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Scanner;
+
+public class Driver {
+	public static Connection conn;
+	
+	public static void main(String[] args) {
+		try {
+			Scanner connStrSource = new Scanner(new File("connString.txt"));
+			String[] connString = connStrSource.nextLine().trim().split("\\s+");
+			connStrSource.close();
+			conn = DriverManager.getConnection(connString[0].trim(), connString[1].trim(), connString[2].trim());
+			System.out.println("Database connection established");
+			Scanner keyboard = new Scanner(System.in);
+			System.out.print("Enter a ticker symbol: ");
+			String ticker = keyboard.nextLine().trim();
+			while (!ticker.matches("")) {
+				processTicker(ticker);
+				System.out.print("\nEnter a ticker symbol: ");
+				ticker = keyboard.nextLine().trim();
+			}
+			conn.close();
+			System.out.println("Database connection closed");
+		}
+		catch (FileNotFoundException ex) {
+			System.out.println("File connString.txt not found");
+			return;
+		}
+		catch (SQLException ex) {
+			System.out.println("SQL exception");
+			ex.printStackTrace();
+			return;
+		}
+	}
+	
+	private static void processTicker(String ticker) {
+		ArrayList<TickerData> dataArray = new ArrayList<TickerData>();
+		try {
+			Statement stat = conn.createStatement();
+			ResultSet rs = stat.executeQuery("CREATE TABLE COMMENTS (id INT NOT NULL AUTO_INCREMENT)");
+			
+			
+		}
+		catch (SQLException ex) {
+			System.out.println("SQL exception in processTicker");
+		}
+	}
+	
+	private static String quote(String str) {
+		return "'" + str + "'";
+	}
+	
+}

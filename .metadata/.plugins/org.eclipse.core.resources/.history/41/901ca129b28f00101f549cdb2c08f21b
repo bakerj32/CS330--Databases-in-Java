@@ -1,0 +1,364 @@
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Scanner;
+
+public class Prog3 {
+	public static Connection connSource, connDest;
+	public static String db = "jimj";
+	public static boolean debug = false;
+	
+	public static void main(String[] args) {
+		try {
+			try{
+				Scanner connStrSource = new Scanner(new File("connStringSource.txt"));
+				String[] connString = connStrSource.nextLine().trim().split("\\s+");
+				connStrSource.close();
+				connSource = DriverManager.getConnection(connString[0].trim(), connString[1].trim(), connString[2].trim());
+				
+				Scanner connStrDest = new Scanner(new File("connStringDest.txt"));
+				connString = connStrDest.nextLine().trim().split("\\s+");
+				connStrDest.close();
+				connDest = DriverManager.getConnection(connString[0].trim(), connString[1].trim(), connString[2].trim());
+				
+				System.out.println("Database connections established");
+			}
+			catch (FileNotFoundException ex) {
+				System.out.println("File connString.txt not found");
+				return;
+			}
+			
+			Statement st = connDest.createStatement();
+			try {
+				st.executeUpdate("drop table `bakerj32_330`.`splits`");
+			}
+			catch(SQLException ex) {}
+			System.out.println("Destination database cleared of tables");
+			
+			//Statement stat = connDest.createStatement();
+			//stat.executeUpdate("create table splits (Ticker char(6), Date char(10), SplitRatio char(6), PrevClose char(15), NextOpen char(15))");
+			System.out.println("Destination table ready");
+			if (debug){
+				PreparedStatement companyStat = connSource.prepareStatement("select distinct industry from company");
+				ResultSet rs = companyStat.executeQuery();
+				
+				java.sql.Date minYear = java.sql.Date.valueOf("2009-01-01");
+				java.sql.Date maxYear = java.sql.Date.valueOf("2010-12-31");
+				ArrayList<IndustryData> industries = new ArrayList<IndustryData>();
+				
+				while (rs.next()) {
+					int count = 0;
+					java.sql.Date minDate = java.sql.Date.valueOf("1980-01-31");
+					java.sql.Date maxDate = java.sql.Date.valueOf("2015-01-31");
+					
+					IndustryData indData = new IndustryData();
+					indData.industry = rs.getString(1);
+					
+					PreparedStatement dateStat = connSource.prepareStatement("select c.Industry, p.Ticker, min(p.TransDate)as minDate, max(p.TransDate) as maxDate " +
+																				"from company c, pricevolume p " +
+																				"where c.Ticker = p.Ticker " +
+																				"AND c.Industry = '" + indData.industry + "' " +
+																				"GROUP BY p.Ticker");
+					ResultSet ds = dateStat.executeQuery();
+					
+					while(ds.next()){
+						count++;
+						java.sql.Date lowDate = ds.getDate(3);
+						java.sql.Date highDate = ds.getDate(4);
+						
+						if (lowDate.after(minDate) && lowDate.before(minYear)){
+							minDate = lowDate;
+						}
+						
+						if (highDate.before(maxDate) && highDate.after(maxYear)){
+							maxDate = highDate;
+						}
+					}
+					ds.close();
+					
+					
+					if (minDate.before(minYear) && maxDate.after(maxYear) && count > 1){
+						
+						indData.minDate = minDate;
+						indData.maxDate = maxDate;
+						industries.add(0, indData);
+					}
+				}
+				rs.close();
+			}
+			
+			PreparedStatement inStat = connDest.prepareStatement("select * from industries");
+			ResultSet ds = inStat.executeQuery();
+			ArrayList<IndustryData> industries = new ArrayList<IndustryData>();
+			ArrayList<TickerData> tickerData = new ArrayList<TickerData>();
+			
+			while(ds.next()){
+				IndustryData indData = new IndustryData();
+				indData.industry = ds.getString(1);
+				indData.minDate = ds.getDate(2);
+				indData.maxDate = ds.getDate(3);
+				industries.add(0, indData);
+				
+				PreparedStatement tickerStat = connSource.prepareStatement("select distinct Ticker from company where Industry = '" + indData.industry + "'");
+				ResultSet ts = tickerStat.executeQuery();
+				while(ts.next()){
+					TickerData ticker = new TickerData();
+					ticker.industry = indData.industry;
+					ticker.minDate = indData.minDate;
+					ticker.maxDate = indData.maxDate;
+					ticker.name = ts.getString(1);
+					tickerData.add(0, ticker);
+				}
+				ts.close();
+			}
+			ds.close();
+			ArrayList<TickerData> validTickers = new ArrayList<TickerData>();
+			getTickers(tickerData);
+			//setSplits(validTickers);
+			connSource.close(); connDest.close();
+			System.out.println("Database connections closed");
+			
+		}
+		catch (SQLException ex) {
+			System.out.println("SQL exception in Driver");
+			ex.printStackTrace();
+			return;
+		}
+		
+	}
+	
+	private static void getTickers(ArrayList<TickerData> tickerData) {
+		ArrayList<TickerData> allTickers = new ArrayList<TickerData>();
+		for (int i = 1; i < tickerData.size(); i++){
+			double runningRest = 0;
+			java.sql.Date nextYear = java.sql.Date.valueOf(tickerData.get(i).minDate.toString());
+			int nYear = tickerData.get(i).minDate.getYear();
+			nYear++;
+			nextYear.setYear(nYear);
+			
+			java.sql.Date lowDate = java.sql.Date.valueOf("1980-12-31");
+			java.sql.Date highDate = java.sql.Date.valueOf("1980-01-01");
+			int indCnt = 0;
+			ArrayList<TickerData> validTickers = new ArrayList<TickerData>();
+			for (int j = tickerData.get(i).minDate.getYear() + 1;j < tickerData.get(i).maxDate.getYear() + 1; j++){
+				ArrayList<TickerData> yearTickers = new ArrayList<TickerData>();
+				
+				lowDate.setYear(j);
+				highDate.setYear(j+1);
+				//System.out.println(tickerData.get(i).industry + ": " + lowDate + " --> " + highDate);
+				
+				try{
+					PreparedStatement tickerStat = connSource.prepareStatement("select Ticker, OpenPrice, ClosePrice, transDate, Volume, HighPrice, LowPrice " + 
+																				"from pricevolume " +
+																				"where Ticker = '" + tickerData.get(i).name + "' " +
+																				"and transDate > '" + lowDate + "' " +
+																				"and transDate < '" + highDate+ "'");
+					ResultSet ts = tickerStat.executeQuery();
+					
+					PreparedStatement iCntStat = connSource.prepareStatement("select count(distinct Ticker) from company where Industry = '" + tickerData.get(i).industry + "'");
+					ResultSet cs = iCntStat.executeQuery();
+					
+					while(cs.next())
+						indCnt = cs.getInt(1);
+					
+					
+					while(ts.next()){
+						TickerData ticker = new TickerData();
+						ticker.industry = tickerData.get(i).industry;
+						ticker.name = ts.getString(1);
+						ticker.open = ts.getDouble(2);
+						ticker.close = ts.getDouble(3);
+						ticker.date = ts.getDate(4);
+						ticker.volume = ts.getLong(5);
+						ticker.high = ts.getDouble(6);
+						ticker.low = ts.getDouble(7);
+						yearTickers.add(0, ticker);
+					}
+					if(yearTickers.size() > 1){
+						TickerData goodTicker = new TickerData();
+						goodTicker = recordSplits(yearTickers, indCnt);
+						validTickers.add(0, goodTicker);
+					}
+					ts.close();
+				}
+				catch(SQLException ex) {
+					System.out.println("SQL error in setSplits()");
+					System.out.println(ex.getMessage());
+				}
+			}		
+			for (int k = 1; k < validTickers.size() - 1; k++){
+				allTickers.add(0, validTickers.get(k));
+			}
+		}
+		//getInvestment(allTickers);
+		//return validTickers;
+	}
+	
+	private static void setSplits(ArrayList<TickerData> tickerData){
+		for(int i = 1; i < tickerData.size(); i++){
+			try{
+				PreparedStatement unadjustedStat = connDest.prepareStatement("insert into unadjusted values (?, ?, ?, ?, ?, ?, ?, ?)");
+				unadjustedStat.setString(1, tickerData.get(i).name);
+				unadjustedStat.setString(2, tickerData.get(i).industry);
+				unadjustedStat.setDate(3, tickerData.get(i).date);
+				unadjustedStat.setDouble(4, tickerData.get(i).open);
+				unadjustedStat.setDouble(5, tickerData.get(i).close);
+				unadjustedStat.setDouble(6, tickerData.get(i).low);
+				unadjustedStat.setDouble(7, tickerData.get(i).high);
+				unadjustedStat.setLong(8, tickerData.get(i).volume);
+				unadjustedStat.execute();
+				unadjustedStat.close();
+			}
+			
+			catch (SQLException ex) {
+				System.out.println("SQL exception in recordSplits");
+				System.out.println(ex.getMessage());
+			}
+			System.out.println(i + ": " + tickerData.get(i).name + ": " + tickerData.get(i).date);
+		}
+	}
+	private static TickerData recordSplits(ArrayList<TickerData> tickerData, int indCnt) { // checks for 2:1, 3:1, and 3:2 splits
+		double epsilon = 0.13; // ratio must be this close to 2, 3, or 1.5 to signal a split
+		ArrayList<TickerData> yearData = new ArrayList<TickerData>();
+		double factor = 1;
+		for(int i = 1; i < tickerData.size() - 1; i++) {
+			
+			double open = tickerData.get(i).open;
+			double close = tickerData.get(i + 1).close;
+			double ratio = close/open;
+			String splitRatio = "";
+			if (Math.abs(ratio - 2.0) < epsilon){
+				factor = factor / 2;
+				splitRatio = "2:1 ";
+			}
+			else if (Math.abs(ratio - 3.0) < epsilon){
+				factor = factor / 3;
+				splitRatio = "3:1 ";
+			}
+			else if (Math.abs(ratio - 1.5) < epsilon){
+				factor = factor / 1.5;
+				splitRatio = "3:2 ";
+			}
+			if (splitRatio.length() > 0) {
+				System.out.print(splitRatio + "split on " + tickerData.get(i).date);
+				System.out.print("; " + String.format("%7.2f", close));
+				System.out.println(" --> " + String.format("%7.2f", open));
+			}
+			
+			tickerData.get(i).open = tickerData.get(i).open * factor;
+			tickerData.get(i).close = tickerData.get(i).close * factor;
+			if (debug){
+				try {
+					PreparedStatement tickerStat = connDest.prepareStatement("insert into unadjusted values (?, ?, ?, ?, ?, ?, ?, ?)");
+					tickerStat.setString(1, tickerData.get(i).name);
+					tickerStat.setString(2, tickerData.get(i).industry);
+					tickerStat.setDate(3, tickerData.get(i).date);
+					tickerStat.setDouble(4, tickerData.get(i).open);
+					tickerStat.setDouble(5, tickerData.get(i).close);
+					tickerStat.setDouble(6, tickerData.get(i).low);
+					tickerStat.setDouble(7, tickerData.get(i).high);
+					tickerStat.setLong(8, tickerData.get(i).volume);
+					tickerStat.execute();
+					tickerStat.close();
+				}
+				catch(SQLException ex) {
+					System.out.println("SQL error in recordSplits()");
+					System.out.println(ex.getMessage());
+				}
+			}
+		}
+		
+		System.out.println(tickerData.get(1).name + " - " + tickerData.get(1).date + ": " + tickerData.get(tickerData.size() - 1).open + " --> " + tickerData.get(1).close);
+		double initInv = tickerData.get(tickerData.size() - 1).open * 10000;
+		double endInv = tickerData.get(1).close * 10000;
+		double endRet = endInv - initInv;
+		double restInitInv = tickerData.get(tickerData.size() - 1).open * (10000 / (indCnt - 1));
+		double restRetInv = tickerData.get(1).close * (10000 / (indCnt - 1));
+		double endRest = restRetInv - restInitInv;
+		tickerData.get(1).restRet = (endRest - 10000) / 10000;
+		tickerData.get(1).tickRet = (endRet - 10000) / 10000;
+		if (debug){
+			try{
+				PreparedStatement tickerStat = connDest.prepareStatement("insert into tickers values (?, ?, ?, ?, ?)");
+				tickerStat.setString(1, tickerData.get(1).name);
+				tickerStat.setDate(2, tickerData.get(1).date);
+				tickerStat.setString(3, tickerData.get(1).industry);
+				tickerStat.setDouble(4, tickerData.get(1).tickRet);
+				tickerStat.setDouble(5, tickerData.get(1).restRet);
+				tickerStat.execute();
+			}
+			
+			catch(SQLException ex) {
+				System.out.println("SQL error in recordSplits()");
+				System.out.println(ex.getMessage());
+			}
+		}
+		return tickerData.get(1);
+		
+	}
+	
+	private static void getInvestment(ArrayList<TickerData> allTickers){
+		for (int i = 1; i < allTickers.size(); i++){
+			try{
+				PreparedStatement tickerStat = connDest.prepareStatement("SELECT sum(restReturn) from tickers " +
+																		"WHERE industry = '" + allTickers.get(i).industry + "' " +
+																		"AND date = '" + allTickers.get(i).date + "'");
+				ResultSet ts = tickerStat.executeQuery();
+				while(ts.next()){
+					double totRest = ts.getDouble(1);
+					double rest = totRest - allTickers.get(i).restRet;
+					PreparedStatement perfStat = connDest.prepareStatement("insert into performance values (?, ?, ?, ?, ?)");
+					perfStat.setString(1, allTickers.get(i).name);
+					perfStat.setString(2, allTickers.get(i).industry);
+					perfStat.setDate(3, allTickers.get(i).date);
+					perfStat.setDouble(4, allTickers.get(i).tickRet);
+					perfStat.setDouble(5, rest);
+					perfStat.execute();
+					
+				}
+			}
+			catch(SQLException ex) {
+				System.out.println("SQL error in recordSplits()");
+			}
+		}
+			
+	}
+	
+	private static void recoverSplits(String ticker) {
+		try {
+			PreparedStatement checkStat = connDest.prepareStatement("select * from splits where ticker = ?");
+			checkStat.setString(1, ticker);
+			ResultSet rs = checkStat.executeQuery();
+			while (rs.next()) {
+				System.out.println(rs.getString(3).trim() + " split on " + rs.getString(2).trim() + ";  " + rs.getString(4).trim() + " --> " + rs.getString(5).trim());
+			}
+			System.out.println();
+		}
+		catch(SQLException ex) {
+			System.out.println("SQL exception in recoverSplits");
+		}
+	}
+	
+
+	
+	private static TickerData extractData(ResultSet rs) {
+		TickerData result = new TickerData();
+		try {
+			result.date = rs.getDate(2);
+			for (int i = 0; i < 4; i++)
+				result.price[i] = Double.parseDouble(rs.getString(i + 3).trim());
+			result.volume = Long.parseLong(rs.getString(7).trim());
+		}
+		catch (SQLException ex) {
+			System.out.println("SQL exception in extractStrings");
+		}
+		return result;
+	}
+
+}

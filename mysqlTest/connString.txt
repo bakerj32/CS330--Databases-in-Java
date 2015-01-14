@@ -1,0 +1,1 @@
+jdbc:mysql://127.0.0.1:3306/cs330stock bakerj32 E7at4yDnfD
